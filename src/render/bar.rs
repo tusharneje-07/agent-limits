@@ -13,7 +13,7 @@ const GRAY: &str = "\x1b[90m";
 fn color_for_pct(pct: f64) -> &'static str {
     if pct < 30.0 {
         GREEN
-    } else if pct < 70.0 {
+    } else if pct <= 70.0 {
         YELLOW
     } else {
         RED
@@ -24,10 +24,8 @@ pub fn render_bar<W: Write>(
     w: &mut W,
     report: &Report,
     requested: &[&str],
+    use_color: bool,
 ) -> std::io::Result<()> {
-    let use_color = std::env::var("NO_COLOR").is_err()
-        && std::env::var("CLICOLOR").map(|v| v != "0").unwrap_or(true);
-
     let mut sections: Vec<String> = vec![];
     for &id in requested {
         let result = match report.providers.get(id) {
@@ -97,12 +95,7 @@ fn render_limits_bar(
         items.push((k.clone(), &limits[k]));
     }
 
-    let label_width = items
-        .iter()
-        .map(|(l, _)| l.len())
-        .max()
-        .unwrap_or(6)
-        .max(6);
+    let label_width = items.iter().map(|(l, _)| l.len()).max().unwrap_or(6).max(6);
 
     for (label, limit) in &items {
         lines.push(format_bar_line(label, label_width, limit, use_color));
@@ -123,6 +116,12 @@ fn render_accounts_bar(
         let plan_label = rate_limit_tier_label(&ar.plan);
         if !plan_label.is_empty() {
             header.push_str(&format!(" [{}]", plan_label));
+        }
+        if let Some(ref err) = ar.error {
+            if !err.is_empty() {
+                lines.push(format!("{}: {}", header, err));
+                continue;
+            }
         }
         lines.push(header);
         if let Some(ref lims) = ar.limits {
@@ -157,8 +156,11 @@ fn format_bar_line(label: &str, label_width: usize, l: &Limit, use_color: bool) 
         format!(
             "  {:<width$}  {}{}  {}{}{}  {}",
             label,
-            bar, RESET,
-            pct_color, pct_str, RESET,
+            bar,
+            RESET,
+            pct_color,
+            pct_str,
+            RESET,
             reset_str,
             width = label_width,
         )
@@ -220,7 +222,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         assert!(output.contains("Opencodego usage"));
@@ -241,7 +243,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         let line = output
@@ -269,7 +271,7 @@ mod tests {
             providers,
         };
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         assert!(output.contains("Opencodego usage"));
@@ -283,7 +285,7 @@ mod tests {
             providers: BTreeMap::new(),
         };
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         assert!(buf.is_empty());
     }
 
@@ -294,7 +296,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         let line = output
@@ -313,7 +315,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         let line = output
@@ -332,7 +334,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         let line = output
@@ -351,7 +353,7 @@ mod tests {
 
         let report = make_report(limits);
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         assert!(output.contains("5-hour"));
@@ -375,6 +377,24 @@ mod tests {
 
         assert!(line.contains("\x1b[31m")); // red for >70%
         assert!(line.contains(RESET));
+    }
+
+    #[test]
+    fn color_boundary_70_percent_is_yellow() {
+        let limit = make_limit(70.0, 30.0, 3600);
+        let line = format_bar_line("5-hour", 12, &limit, true);
+
+        assert!(line.contains("\x1b[33m")); // yellow (not red)
+        assert!(!line.contains("\x1b[31m"));
+    }
+
+    #[test]
+    fn color_boundary_30_percent_is_yellow() {
+        let limit = make_limit(30.0, 70.0, 3600);
+        let line = format_bar_line("5-hour", 12, &limit, true);
+
+        assert!(line.contains("\x1b[33m")); // yellow
+        assert!(!line.contains("\x1b[32m"));
     }
 
     #[test]
@@ -408,7 +428,7 @@ mod tests {
         };
 
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego", "claude"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego", "claude"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         assert!(output.contains("Opencodego usage"));
@@ -423,17 +443,20 @@ mod tests {
         limits.insert("five_hour".to_string(), make_limit(60.0, 40.0, 3600));
 
         let mut providers = BTreeMap::new();
-        providers.insert("opencodego".to_string(), ProviderResult {
-            limits: None,
-            accounts: vec![AccountResult {
-                email: "test@example.com".to_string(),
-                plan: "pro".to_string(),
-                active: true,
-                limits: Some(limits),
+        providers.insert(
+            "opencodego".to_string(),
+            ProviderResult {
+                limits: None,
+                accounts: vec![AccountResult {
+                    email: "test@example.com".to_string(),
+                    plan: "pro".to_string(),
+                    active: true,
+                    limits: Some(limits),
+                    error: None,
+                }],
                 error: None,
-            }],
-            error: None,
-        });
+            },
+        );
 
         let report = Report {
             checked_at: Utc::now(),
@@ -441,12 +464,43 @@ mod tests {
         };
 
         let mut buf = vec![];
-        render_bar(&mut buf, &report, &["opencodego"]).unwrap();
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
         let output = String::from_utf8(buf).unwrap();
 
         assert!(output.contains("test@example.com"));
         assert!(output.contains("(active)"));
         assert!(output.contains("[pro]"));
         assert!(output.contains("60.0%"));
+    }
+
+    #[test]
+    fn accounts_with_error_rendered() {
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "opencodego".to_string(),
+            ProviderResult {
+                limits: None,
+                accounts: vec![AccountResult {
+                    email: "broken@example.com".to_string(),
+                    plan: "".to_string(),
+                    active: false,
+                    limits: None,
+                    error: Some("token expired".to_string()),
+                }],
+                error: None,
+            },
+        );
+
+        let report = Report {
+            checked_at: Utc::now(),
+            providers,
+        };
+
+        let mut buf = vec![];
+        render_bar(&mut buf, &report, &["opencodego"], false).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(output.contains("broken@example.com"));
+        assert!(output.contains("token expired"));
     }
 }
